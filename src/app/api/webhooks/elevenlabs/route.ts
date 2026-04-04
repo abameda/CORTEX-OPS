@@ -1,5 +1,9 @@
+import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { getElevenLabsConfig } from "@/lib/integrations";
+import {
+  getElevenLabsConfig,
+  getElevenLabsWebhookSecret,
+} from "@/lib/integrations";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { isSupabaseConfigured } from "@/lib/supabase-config";
 import { saveTranscriptAndAdvance } from "@/lib/transcripts";
@@ -34,6 +38,8 @@ interface ElevenLabsWebhookPayload {
   data?: ElevenLabsConversationPayload;
 }
 
+const ELEVENLABS_SIGNATURE_TOLERANCE_MS = 5 * 60 * 1000;
+
 function formatTranscript(transcript: ElevenLabsTranscriptTurn[]) {
   return transcript
     .filter((turn) => typeof turn.message === "string" && turn.message.trim().length > 0)
@@ -46,6 +52,56 @@ function formatTranscript(transcript: ElevenLabsTranscriptTurn[]) {
 
 function getString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function safeCompare(a: string, b: string) {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(left, right);
+}
+
+function parseSignatureHeader(signatureHeader: string) {
+  const parts = signatureHeader
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const timestamp = parts.find((part) => part.startsWith("t="))?.slice(2) ?? null;
+  const signatures = parts
+    .filter((part) => part.startsWith("v0="))
+    .map((part) => part.slice(3))
+    .filter(Boolean);
+
+  return { timestamp, signatures };
+}
+
+function verifyElevenLabsSignature(rawBody: string, signatureHeader: string) {
+  const { timestamp, signatures } = parseSignatureHeader(signatureHeader);
+
+  if (!timestamp || signatures.length === 0) {
+    return false;
+  }
+
+  const timestampMs = Number(timestamp) * 1000;
+  if (!Number.isFinite(timestampMs)) {
+    return false;
+  }
+
+  if (Math.abs(Date.now() - timestampMs) > ELEVENLABS_SIGNATURE_TOLERANCE_MS) {
+    return false;
+  }
+
+  const expectedSignature = crypto
+    .createHmac("sha256", getElevenLabsWebhookSecret())
+    .update(`${timestamp}.${rawBody}`)
+    .digest("hex");
+
+  return signatures.some((signature) => safeCompare(signature, expectedSignature));
 }
 
 async function fetchConversation(conversationId: string) {
@@ -110,7 +166,17 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const body = (await request.json()) as ElevenLabsWebhookPayload;
+    const rawBody = await request.text();
+    const signatureHeader = request.headers.get("ElevenLabs-Signature");
+
+    if (!signatureHeader || !verifyElevenLabsSignature(rawBody, signatureHeader)) {
+      return NextResponse.json(
+        { error: "Invalid ElevenLabs webhook signature." },
+        { status: 401 }
+      );
+    }
+
+    const body = JSON.parse(rawBody) as ElevenLabsWebhookPayload;
     const initialConversation = body.data;
     const webhookType = body.type ?? "unknown";
 

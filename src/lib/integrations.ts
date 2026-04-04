@@ -52,6 +52,15 @@ export function getElevenLabsConfig() {
   return config;
 }
 
+export function getElevenLabsWebhookSecret() {
+  const secret = process.env.ELEVENLABS_WEBHOOK_SECRET?.trim();
+  if (!secret) {
+    throw new Error("Missing ELEVENLABS_WEBHOOK_SECRET.");
+  }
+
+  return secret;
+}
+
 export function parseTier(value?: string | null, fallback: Tier = "launch"): Tier {
   return normalizeTier(value) ?? fallback;
 }

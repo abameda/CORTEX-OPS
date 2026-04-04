@@ -219,6 +219,7 @@ Processes Cal.com booking webhooks and creates or updates a workspace before Sta
 
 Processes ElevenLabs post-call transcription webhooks and converts the conversation into a saved Stage 1 transcript.
 
+- Signature verification uses `ElevenLabs-Signature` and `ELEVENLABS_WEBHOOK_SECRET`.
 - Uses `ELEVENLABS_API_KEY` to fetch the latest conversation details when the webhook payload does not include full transcript data.
 - Rejects calls whose `agent_id` does not match `ELEVENLABS_AGENT_ID`.
 - Resolves the target workspace from ElevenLabs dynamic variables:
@@ -305,6 +306,8 @@ Configure an ElevenLabs post-call webhook that points to:
 ```text
 https://your-domain.com/api/webhooks/elevenlabs
 ```
+
+Create the webhook with HMAC authentication and set the generated shared secret as `ELEVENLABS_WEBHOOK_SECRET`.
 
 In the agent's dynamic variables, include at least one of:
 

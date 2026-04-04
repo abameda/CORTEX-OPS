@@ -5,6 +5,21 @@ import { isSupabaseConfigured } from "@/lib/supabase-config";
 import { createClient } from "@/lib/supabase-server";
 import { Workspace } from "@/types";
 
+function getUserLabel(user: {
+  email?: string | null;
+  user_metadata?: { email?: string | null };
+  identities?: Array<{
+    identity_data?: { email?: string | null };
+  }> | null;
+} | null) {
+  return (
+    user?.email ||
+    user?.user_metadata?.email ||
+    user?.identities?.find((identity) => identity.identity_data?.email)?.identity_data?.email ||
+    "Unknown user"
+  );
+}
+
 export default async function Home() {
   const configured = isSupabaseConfigured();
   let userEmail = "Local preview mode";
@@ -17,7 +32,7 @@ export default async function Home() {
       data: { user },
     } = await supabase.auth.getUser();
 
-    userEmail = user?.email ?? "Unknown user";
+    userEmail = getUserLabel(user);
 
     const { data, error } = await supabase
       .from("workspaces")

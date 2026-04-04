@@ -202,6 +202,30 @@ The schema lives in [`supabase/schema.sql`](supabase/schema.sql).
 
 ## API Surface
 
+### `POST /api/webhooks/cal`
+
+Processes Cal.com booking webhooks and creates or updates a workspace before Stage 1 begins.
+
+- Signature verification uses `X-Cal-Signature-256` and `CAL_WEBHOOK_SECRET`.
+- Supported events: `BOOKING_CREATED`, `BOOKING_REQUESTED`, `BOOKING_RESCHEDULED`.
+- If `payload.metadata.workspace_id` is present, the matching workspace is updated.
+- Otherwise a new workspace is created and Stage 1 is seeded automatically.
+- Optional booking fields:
+  - `customInputs.tier` or `metadata.tier`
+  - `customInputs.currency` or `metadata.currency`
+  - `customInputs.businessName` or `customInputs.business_name`
+
+### `POST /api/webhooks/elevenlabs`
+
+Processes ElevenLabs post-call transcription webhooks and converts the conversation into a saved Stage 1 transcript.
+
+- Uses `ELEVENLABS_API_KEY` to fetch the latest conversation details when the webhook payload does not include full transcript data.
+- Rejects calls whose `agent_id` does not match `ELEVENLABS_AGENT_ID`.
+- Resolves the target workspace from ElevenLabs dynamic variables:
+  - `workspace_id`
+  - `cal_booking_id`
+- After a successful transcript save, Stage 1 is completed and Stage 2 is unlocked.
+
 ### `POST /api/workspace`
 
 Creates a workspace and seeds Stage 1 as `discovery_call`.
@@ -247,6 +271,58 @@ Prompt orchestration lives in [`src/lib/prompts/index.ts`](src/lib/prompts/index
 - Stage 6 generates ongoing content and ad-support direction.
 
 The prompt layer is separated cleanly from route handlers so workflow logic stays readable and maintainable.
+
+## Automation Wiring
+
+The manual operator workflow is still the primary path, but the roadmap integrations are now wired so the app can accept upstream intake events.
+
+### Cal.com
+
+Configure a webhook in Cal.com that points to:
+
+```text
+https://your-domain.com/api/webhooks/cal
+```
+
+Use a secret value that matches `CAL_WEBHOOK_SECRET`.
+
+Recommended booking metadata:
+
+```json
+{
+  "workspace_id": "optional-existing-workspace-id",
+  "tier": "launch",
+  "currency": "EGP"
+}
+```
+
+If `workspace_id` is omitted, CORTEX-ops creates a new workspace from the booking attendee details and defaults the tier to `launch` and currency to `EGP`.
+
+### ElevenLabs
+
+Configure an ElevenLabs post-call webhook that points to:
+
+```text
+https://your-domain.com/api/webhooks/elevenlabs
+```
+
+In the agent's dynamic variables, include at least one of:
+
+```json
+{
+  "workspace_id": "uuid-from-cortex-ops"
+}
+```
+
+or
+
+```json
+{
+  "cal_booking_id": "booking-id-from-cal"
+}
+```
+
+The webhook handler will fetch the conversation transcript using `ELEVENLABS_API_KEY`, verify it belongs to `ELEVENLABS_AGENT_ID`, save it into `transcripts`, mark Stage 1 complete, and unlock Stage 2.
 
 ## System Prompts
 

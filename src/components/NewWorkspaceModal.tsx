@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { FormEvent, useState, useTransition } from "react";
+import { readJsonResponse } from "@/lib/api-client";
 import { Currency, Tier } from "@/types";
 
 const TIERS: Array<{ value: Tier; label: string }> = [
@@ -41,7 +42,7 @@ export default function NewWorkspaceModal({
       }),
     });
 
-    const data = (await response.json()) as { error?: string; workspace?: { id: string } };
+    const data = await readJsonResponse<{ error?: string; workspace?: { id: string } }>(response);
 
     if (!response.ok || !data.workspace) {
       setError(data.error || "Failed to create workspace.");

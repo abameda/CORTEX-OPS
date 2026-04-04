@@ -57,12 +57,21 @@ export default async function WorkspaceDetailPage({
             <p className="text-[11px] uppercase tracking-[0.28em] text-cortex-accent-light">
               Workspace detail
             </p>
-            <Link
-              href="/"
-              className="mt-4 inline-flex text-sm text-cortex-text-secondary transition hover:text-cortex-accent"
-            >
-              Back to dashboard
-            </Link>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <Link
+                href="/"
+                className="inline-flex text-sm text-cortex-text-secondary transition hover:text-cortex-accent"
+              >
+                Back to dashboard
+              </Link>
+              <Link
+                href="/"
+                aria-label="Close workspace and return to dashboard"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-cortex-border bg-cortex-base/70 text-base text-cortex-text-secondary transition hover:border-cortex-accent hover:text-cortex-accent"
+              >
+                X
+              </Link>
+            </div>
             <h1 className="mt-4 font-display text-4xl font-semibold uppercase tracking-[0.06em]">
               {workspace.client_name}
             </h1>

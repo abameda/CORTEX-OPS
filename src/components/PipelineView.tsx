@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
+import { readJsonResponse } from "@/lib/api-client";
 import {
   getCompletedStageOutput,
   getRelevantStages,
@@ -62,11 +63,11 @@ export default function PipelineView({
     startGenerating(async () => {
       try {
         const response = await fetch(`/api/workspace/${workspace.id}/prompt?stage=${stageNumber}`);
-        const data = (await response.json()) as {
+        const data = await readJsonResponse<{
           error?: string;
           prompt?: string;
           subStage?: string;
-        };
+        }>(response);
 
         if (!response.ok || !data.prompt) {
           throw new Error(data.error || "Failed to generate prompt.");
@@ -106,7 +107,7 @@ export default function PipelineView({
           }),
         });
 
-        const data = (await response.json()) as { error?: string };
+        const data = await readJsonResponse<{ error?: string }>(response);
         if (!response.ok) {
           throw new Error(data.error || "Failed to save output.");
         }

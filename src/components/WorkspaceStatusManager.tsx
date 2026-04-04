@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
+import { readJsonResponse } from "@/lib/api-client";
 import { Workspace, WorkspaceStatus } from "@/types";
 
 const STATUSES: WorkspaceStatus[] = ["active", "completed", "archived"];
@@ -30,7 +31,7 @@ export default function WorkspaceStatusManager({
           body: JSON.stringify({ status }),
         });
 
-        const data = (await response.json()) as { error?: string };
+        const data = await readJsonResponse<{ error?: string }>(response);
         if (!response.ok) {
           throw new Error(data.error || "Failed to update workspace status.");
         }

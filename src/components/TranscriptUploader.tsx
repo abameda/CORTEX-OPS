@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { readJsonResponse } from "@/lib/api-client";
 
 export default function TranscriptUploader({
   workspaceId,
@@ -34,7 +35,7 @@ export default function TranscriptUploader({
         }),
       });
 
-      const data = (await response.json()) as { error?: string };
+      const data = await readJsonResponse<{ error?: string }>(response);
       if (!response.ok) {
         throw new Error(data.error || "Failed to save transcript.");
       }

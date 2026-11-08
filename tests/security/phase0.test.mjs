@@ -247,7 +247,12 @@ test("a signed-in non-staff account is forbidden everywhere", async () => {
 
 test("a non-staff account's own JWT sees no rows through PostgREST", async () => {
   const client = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false } });
-  await client.auth.signInWithPassword({ email: users.outsider.email, password: PASSWORD });
+  const { data: signIn, error: signInError } = await client.auth.signInWithPassword({
+    email: users.outsider.email,
+    password: PASSWORD,
+  });
+  assert.equal(signInError, null, "outsider sign-in must succeed or this test checks nothing");
+  assert.equal(signIn.user?.id, users.outsider.id);
   for (const table of ["workspaces", "transcripts", "stage_outputs", "call_sessions"]) {
     const { data, error } = await client.from(table).select("id");
     assert.ok(error || data.length === 0, table);
@@ -477,4 +482,36 @@ test("a started call's transcript lands only in its own workspace, once", async 
   const second = await api("/api/webhooks/elevenlabs", { method: "POST", raw: other.raw, headers: { "ElevenLabs-Signature": other.header } });
   assert.equal(second.json.ignored, "session_not_active");
   assert.equal((await transcriptsFor(workspaceB.id)).length, 1);
+});
+
+// ---- webhook claim lease --------------------------------------------------------------
+test("an abandoned webhook claim is taken over by a later retry; a fresh one returns 409", async () => {
+  const link = await createCallLink(workspaceA.id);
+  const started = await startCall(link.token);
+  assert.equal(started.status, 200, started.text);
+
+  // A run that crashed 10 minutes ago left an unfinished claim behind.
+  const abandoned = `conv-abandoned-${run}`;
+  await admin.from("webhook_events").insert({
+    provider: "elevenlabs",
+    event_key: `post_call_transcription:${abandoned}`,
+    received_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+  });
+  const retry = elSigned(elEvent(abandoned, { call_session_id: started.json.callSessionId }));
+  const res = await api("/api/webhooks/elevenlabs", { method: "POST", raw: retry.raw, headers: { "ElevenLabs-Signature": retry.header } });
+  assert.equal(res.status, 200, res.text);
+  assert.equal(res.json.workspaceId, workspaceA.id, "reclaimed and processed");
+  const { data: done } = await admin
+    .from("webhook_events")
+    .select("processed_at")
+    .eq("event_key", `post_call_transcription:${abandoned}`)
+    .single();
+  assert.ok(done.processed_at, "marked processed");
+
+  // Another request is processing right now: the provider must retry later, not drop it.
+  const busy = `conv-busy-${run}`;
+  await admin.from("webhook_events").insert({ provider: "elevenlabs", event_key: `post_call_transcription:${busy}` });
+  const busyEvent = elSigned(elEvent(busy, { call_session_id: crypto.randomUUID() }));
+  const conflict = await api("/api/webhooks/elevenlabs", { method: "POST", raw: busyEvent.raw, headers: { "ElevenLabs-Signature": busyEvent.header } });
+  assert.equal(conflict.status, 409);
 });

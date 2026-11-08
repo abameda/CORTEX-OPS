@@ -187,7 +187,7 @@ bash tests/security/run-local.sh
 | Suite | Count | Covers |
 |---|---|---|
 | pgTAP `supabase/tests/phase0_rls.test.sql` | 26 | anon, signed-in non-staff, staff and service-role access on every table, including self-granting staff |
-| HTTP `tests/security/phase0.test.mjs` | 17 | see below |
+| HTTP `tests/security/phase0.test.mjs` | 18 | see below |
 
 The HTTP suite covers:
 - Sign-up disabled.
@@ -206,7 +206,7 @@ The HTTP suite covers:
 - ElevenLabs replay.
 - A second conversation on the same session.
 
-**Result on 2026-11-08: 26/26 and 17/17 passing.** The pgTAP suite was also run against the old policies, where 20 checks failed. That confirms the tests detect the original vulnerability.
+**Result on 2026-11-08: 26/26 and 18/18 passing.** The pgTAP suite was also run against the old policies, where 20 checks failed. That confirms the tests detect the original vulnerability.
 
 **Not covered by automated tests**
 - A real ElevenLabs call. The token endpoint is mocked: `GET /v1/convai/conversation/token` is the endpoint the official `@elevenlabs/client` SDK uses, but the private-agent response was not exercised against the live API.

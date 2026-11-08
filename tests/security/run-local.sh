@@ -31,13 +31,32 @@ echo "== Building app"
 npx next build >/dev/null
 
 echo "== Starting app on :3107"
-npx next start -p 3107 >/tmp/cortex-ops-phase0.log 2>&1 &
+# Refuse to run against a stale server left on the port by an earlier run.
+if curl -s -o /dev/null "$OPS_BASE_URL/login"; then
+  echo "Port 3107 is already serving something. Stop it and re-run." >&2
+  exit 1
+fi
+# Start the Next.js binary directly (not through npx) so $APP_PID is the
+# server itself and the EXIT trap really stops it.
+node node_modules/next/dist/bin/next start -p 3107 >/tmp/cortex-ops-phase0.log 2>&1 &
 APP_PID=$!
 trap 'kill $APP_PID 2>/dev/null || true' EXIT
+READY=0
 for _ in $(seq 1 60); do
-  curl -s -o /dev/null "$OPS_BASE_URL/login" && break
+  if ! kill -0 "$APP_PID" 2>/dev/null; then
+    echo "App exited during start-up; see /tmp/cortex-ops-phase0.log" >&2
+    exit 1
+  fi
+  if curl -s -o /dev/null "$OPS_BASE_URL/login"; then
+    READY=1
+    break
+  fi
   sleep 1
 done
+if [ "$READY" -ne 1 ]; then
+  echo "App did not become ready within 60s; see /tmp/cortex-ops-phase0.log" >&2
+  exit 1
+fi
 
 echo "== HTTP integration tests"
 node --test tests/security/*.test.mjs

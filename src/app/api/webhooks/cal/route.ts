@@ -12,6 +12,7 @@ import { createAdminClient } from "@/lib/supabase-admin";
 import { isSupabaseConfigured } from "@/lib/supabase-config";
 import {
   claimWebhookEvent,
+  completeWebhookEvent,
   releaseWebhookEvent,
   safeCompare,
   sha256Hex,
@@ -273,6 +274,12 @@ export async function POST(request: NextRequest) {
     if (claim === "duplicate") {
       return NextResponse.json({ received: true, duplicate: true, event });
     }
+    if (claim === "in_progress") {
+      return NextResponse.json(
+        { error: "This delivery is already being processed. Retry later." },
+        { status: 409 }
+      );
+    }
   } catch (error) {
     return serverError("webhook.cal.claim", error);
   }
@@ -280,6 +287,7 @@ export async function POST(request: NextRequest) {
   try {
     const workspaceId = await upsertWorkspaceForBooking(supabase, bookingUid, body.payload);
     await ensureDiscoveryStage(supabase, workspaceId, bookingUid, body.payload);
+    await completeWebhookEvent(supabase, "cal", eventKey);
 
     return NextResponse.json({ received: true, event, workspaceId });
   } catch (error) {

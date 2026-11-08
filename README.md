@@ -197,8 +197,9 @@ The schema lives in [`supabase/migrations/`](supabase/migrations/): the original
 ### Security Model
 
 - Row Level Security is enabled on all tables.
-- Authenticated users currently have full access.
-- The implementation assumes a single-operator internal tool.
+- Only users listed in `public.staff_members` can read or write project data (`staff_all` policies via `private.is_staff()`). Membership is managed with SQL; it cannot be granted through the API.
+- The `anon` role has no access to these tables. `webhook_events` is service-role only.
+- Public sign-up must stay disabled. See [`docs/SECURITY-PHASE0.md`](docs/SECURITY-PHASE0.md) for the full model, deployment order and rollback.
 
 ## API Surface
 
@@ -504,7 +505,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 ```
 
-The current implementation depends directly on the public URL and anon key. The service role key is included for future operational work.
+The app uses the public URL and anon key for signed-in staff requests. `SUPABASE_SERVICE_ROLE_KEY` is **required** on the server: the Cal.com and ElevenLabs webhooks and the token-gated `POST /api/call/start` use it after verifying their own signature or token. Never expose it to the browser.
 
 ### 3. Create the database schema
 

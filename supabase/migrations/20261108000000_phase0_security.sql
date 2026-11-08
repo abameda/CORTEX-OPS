@@ -109,8 +109,13 @@ create table if not exists public.webhook_events (
   provider text not null check (provider in ('cal', 'elevenlabs')),
   event_key text not null,
   received_at timestamptz not null default now(),
+  -- null while a request is processing the event; an unfinished claim older
+  -- than the app's lease (5 minutes) may be taken over by a provider retry.
+  processed_at timestamptz,
   unique (provider, event_key)
 );
+
+alter table public.webhook_events add column if not exists processed_at timestamptz;
 
 alter table public.webhook_events enable row level security;
 revoke all on public.webhook_events from anon, authenticated;

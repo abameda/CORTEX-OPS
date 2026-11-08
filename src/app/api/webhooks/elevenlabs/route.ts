@@ -10,7 +10,12 @@ import {
 import { createAdminClient } from "@/lib/supabase-admin";
 import { isSupabaseConfigured } from "@/lib/supabase-config";
 import { saveTranscriptAndAdvance } from "@/lib/transcripts";
-import { claimWebhookEvent, releaseWebhookEvent, safeCompare } from "@/lib/webhook-security";
+import {
+  claimWebhookEvent,
+  completeWebhookEvent,
+  releaseWebhookEvent,
+  safeCompare,
+} from "@/lib/webhook-security";
 
 interface ElevenLabsTranscriptTurn {
   role?: string;
@@ -208,69 +213,86 @@ export async function POST(request: NextRequest) {
     if (claim === "duplicate") {
       return NextResponse.json({ received: true, duplicate: true, conversationId });
     }
+    if (claim === "in_progress") {
+      return NextResponse.json(
+        { error: "This conversation is already being processed. Retry later." },
+        { status: 409 }
+      );
+    }
   } catch (error) {
     return serverError("webhook.elevenlabs.claim", error);
   }
 
   try {
-    const initialConversation = body.data;
-    const conversation =
-      initialConversation?.transcript && initialConversation.transcript.length > 0
-        ? initialConversation
-        : await fetchConversation(conversationId);
-
-    if (conversation.agent_id !== agentId) {
-      console.warn("[webhook.elevenlabs] agent_id mismatch", { conversationId });
-      return NextResponse.json({ received: true, ignored: "agent_mismatch" });
-    }
-
-    const transcriptText = formatTranscript(conversation.transcript ?? []);
-    if (!transcriptText) {
-      return NextResponse.json({ received: true, ignored: "empty_transcript" });
-    }
-
-    const callSessionId =
-      conversation.conversation_initiation_client_data?.dynamic_variables?.call_session_id;
-    if (!isUuid(callSessionId)) {
-      console.warn("[webhook.elevenlabs] conversation without a call session", {
-        conversationId,
-      });
-      return NextResponse.json({ received: true, ignored: "unbound_conversation" });
-    }
-
-    const workspaceId = await bindCallSession(supabase, callSessionId, conversationId);
-    if (!workspaceId) {
-      console.warn("[webhook.elevenlabs] call session not active", {
-        conversationId,
-        callSessionId,
-      });
-      return NextResponse.json({ received: true, ignored: "session_not_active" });
-    }
-
-    const result = await saveTranscriptAndAdvance(supabase, {
-      workspaceId,
-      rawTranscript: transcriptText,
-      durationSeconds: conversation.metadata?.call_duration_secs ?? null,
-      language: "en",
-      extractedData: {
-        source: "elevenlabs_webhook",
-        agent_id: conversation.agent_id ?? null,
-        conversation_id: conversation.conversation_id ?? null,
-        call_session_id: callSessionId,
-        status: conversation.status ?? null,
-        summary: conversation.analysis?.transcript_summary ?? null,
-        metadata: conversation.metadata ?? null,
-      },
-    });
-
-    return NextResponse.json({
-      ...result,
-      received: true,
-      workspaceId,
-      conversationId,
-    });
+    const result = await processConversation(supabase, body.data, conversationId, agentId);
+    // Ignored outcomes are final too: retrying them cannot change the result.
+    await completeWebhookEvent(supabase, "elevenlabs", eventKey);
+    return NextResponse.json(result);
   } catch (error) {
     await releaseWebhookEvent(supabase, "elevenlabs", eventKey);
     return serverError("webhook.elevenlabs", error);
   }
+}
+
+async function processConversation(
+  supabase: SupabaseClient,
+  initialConversation: ElevenLabsConversationPayload | undefined,
+  conversationId: string,
+  agentId: string
+): Promise<Record<string, unknown>> {
+  const conversation =
+    initialConversation?.transcript && initialConversation.transcript.length > 0
+      ? initialConversation
+      : await fetchConversation(conversationId);
+
+  if (conversation.agent_id !== agentId) {
+    console.warn("[webhook.elevenlabs] agent_id mismatch", { conversationId });
+    return { received: true, ignored: "agent_mismatch" };
+  }
+
+  const transcriptText = formatTranscript(conversation.transcript ?? []);
+  if (!transcriptText) {
+    return { received: true, ignored: "empty_transcript" };
+  }
+
+  const callSessionId =
+    conversation.conversation_initiation_client_data?.dynamic_variables?.call_session_id;
+  if (!isUuid(callSessionId)) {
+    console.warn("[webhook.elevenlabs] conversation without a call session", {
+      conversationId,
+    });
+    return { received: true, ignored: "unbound_conversation" };
+  }
+
+  const workspaceId = await bindCallSession(supabase, callSessionId, conversationId);
+  if (!workspaceId) {
+    console.warn("[webhook.elevenlabs] call session not active", {
+      conversationId,
+      callSessionId,
+    });
+    return { received: true, ignored: "session_not_active" };
+  }
+
+  const result = await saveTranscriptAndAdvance(supabase, {
+    workspaceId,
+    rawTranscript: transcriptText,
+    durationSeconds: conversation.metadata?.call_duration_secs ?? null,
+    language: "en",
+    extractedData: {
+      source: "elevenlabs_webhook",
+      agent_id: conversation.agent_id ?? null,
+      conversation_id: conversation.conversation_id ?? null,
+      call_session_id: callSessionId,
+      status: conversation.status ?? null,
+      summary: conversation.analysis?.transcript_summary ?? null,
+      metadata: conversation.metadata ?? null,
+    },
+  });
+
+  return {
+    ...result,
+    received: true,
+    workspaceId,
+    conversationId,
+  };
 }

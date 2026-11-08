@@ -134,6 +134,7 @@ Run the steps in this order. Steps marked **[you]** need dashboard access I do n
    - An anonymous `GET /` must redirect to `/login`.
    - Your account must load the dashboard.
    - "Create call link" must return a link.
+   - In Vercel → the deployment → **Functions**, confirm `/api/webhooks/cal` and `/api/webhooks/elevenlabs` show a max duration of **60s**. The routes export `maxDuration = 60`. The webhook claim lease (5 minutes, `src/lib/webhook-security.ts`) is safe only while that limit stays well below it, so recheck after any plan or project setting change.
 8. **[you] Vercel → cortex → Environment Variables:** add `NEXT_PUBLIC_OPS_URL=https://cortex-ops.vercel.app`. It is inlined at build time, so set it **before** deploying.
 9. **Deploy CORTEX (site)** from its branch. Open a fresh call link and confirm the call connects.
 10. Only now restore or connect the Supabase project, if it was paused.

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireStaffApi } from "@/lib/auth";
+import { badRequest, readJsonBody, serverError } from "@/lib/http";
 import { isSupabaseConfigured } from "@/lib/supabase-config";
-import { createClient } from "@/lib/supabase-server";
 import { Currency, Tier } from "@/types";
 
 const VALID_TIERS: Tier[] = ["launch", "build", "scale"];
@@ -14,33 +15,42 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const auth = await requireStaffApi();
+  if (!auth.ok) {
+    return auth.response;
+  }
+  const { supabase } = auth.context;
+
+  const body = await readJsonBody<{
+    clientName?: string;
+    businessName?: string | null;
+    tier?: Tier;
+    currency?: Currency;
+  }>(request);
+
+  if (!body) {
+    return badRequest("A JSON body is required.");
+  }
+
+  const clientName = typeof body.clientName === "string" ? body.clientName.trim() : "";
+  const businessName =
+    typeof body.businessName === "string" ? body.businessName.trim() || null : null;
+  const tier = body.tier;
+  const currency = body.currency ?? "EGP";
+
+  if (!clientName || clientName.length > 200) {
+    return badRequest("Client name is required (max 200 characters).");
+  }
+
+  if (!tier || !VALID_TIERS.includes(tier)) {
+    return badRequest("Tier must be launch, build, or scale.");
+  }
+
+  if (!VALID_CURRENCIES.includes(currency)) {
+    return badRequest("Currency must be EGP or USD.");
+  }
+
   try {
-    const body = (await request.json()) as {
-      clientName?: string;
-      businessName?: string | null;
-      tier?: Tier;
-      currency?: Currency;
-    };
-
-    const clientName = body.clientName?.trim();
-    const businessName = body.businessName?.trim() || null;
-    const tier = body.tier;
-    const currency = body.currency ?? "EGP";
-
-    if (!clientName) {
-      return NextResponse.json({ error: "Client name is required." }, { status: 400 });
-    }
-
-    if (!tier || !VALID_TIERS.includes(tier)) {
-      return NextResponse.json({ error: "Tier must be launch, build, or scale." }, { status: 400 });
-    }
-
-    if (!VALID_CURRENCIES.includes(currency)) {
-      return NextResponse.json({ error: "Currency must be EGP or USD." }, { status: 400 });
-    }
-
-    const supabase = await createClient();
-
     const { data: workspace, error: workspaceError } = await supabase
       .from("workspaces")
       .insert({
@@ -74,7 +84,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ workspace }, { status: 201 });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to create workspace.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return serverError("workspace.create", error);
   }
 }

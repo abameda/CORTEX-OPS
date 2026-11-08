@@ -1,4 +1,7 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
+import { requireStaffApi } from "@/lib/auth";
+import { badRequest, isUuid, notFound, readJsonBody, serverError } from "@/lib/http";
 import {
   getDefaultStageName,
   getNextRelevantStage,
@@ -6,14 +9,15 @@ import {
   isStageThreeComplete,
 } from "@/lib/pipeline";
 import { isSupabaseConfigured } from "@/lib/supabase-config";
-import { createClient } from "@/lib/supabase-server";
 import { Workspace } from "@/types";
+
+const STAGE_NAME_PATTERN = /^[a-z0-9_]{1,40}$/;
 
 async function ensureStageEntry(
   workspaceId: string,
   stage: number,
   stageName: string,
-  supabase: Awaited<ReturnType<typeof createClient>>
+  supabase: SupabaseClient
 ) {
   const { data: existing, error } = await supabase
     .from("stage_outputs")
@@ -46,7 +50,7 @@ async function advanceWorkspaceIfNeeded(
   workspace: Workspace,
   stage: number,
   allOutputs: Parameters<typeof isStageThreeComplete>[0],
-  supabase: Awaited<ReturnType<typeof createClient>>
+  supabase: SupabaseClient
 ) {
   let nextStage: number | null = null;
 
@@ -118,36 +122,56 @@ export async function POST(
     );
   }
 
+  const auth = await requireStaffApi();
+  if (!auth.ok) {
+    return auth.response;
+  }
+  const { supabase } = auth.context;
+
+  const { id } = await context.params;
+  if (!isUuid(id)) {
+    return notFound("Workspace not found.");
+  }
+
+  const body = await readJsonBody<{
+    stage?: number;
+    stageName?: string;
+    rawOutput?: string;
+    promptUsed?: string | null;
+    outputData?: Record<string, unknown> | null;
+  }>(request);
+
+  if (!body) {
+    return badRequest("A JSON body is required.");
+  }
+
+  const stage = Number(body.stage);
+  const rawOutput = typeof body.rawOutput === "string" ? body.rawOutput.trim() : "";
+  const stageName =
+    (typeof body.stageName === "string" ? body.stageName.trim() : "") ||
+    getDefaultStageName(stage);
+
+  if (!Number.isInteger(stage) || stage < 1 || stage > 6 || !rawOutput) {
+    return badRequest("Stage (1-6) and rawOutput are required.");
+  }
+
+  if (!STAGE_NAME_PATTERN.test(stageName)) {
+    return badRequest("stageName must be lowercase letters, digits, or underscores.");
+  }
+
   try {
-    const { id } = await context.params;
-    const body = (await request.json()) as {
-      stage?: number;
-      stageName?: string;
-      rawOutput?: string;
-      promptUsed?: string | null;
-      outputData?: Record<string, unknown> | null;
-    };
-
-    const stage = Number(body.stage);
-    const rawOutput = body.rawOutput?.trim();
-    const stageName = body.stageName?.trim() || getDefaultStageName(stage);
-
-    if (!stage || !rawOutput) {
-      return NextResponse.json(
-        { error: "Stage and rawOutput are required." },
-        { status: 400 }
-      );
-    }
-
-    const supabase = await createClient();
     const { data: workspace, error: workspaceError } = await supabase
       .from("workspaces")
       .select("*")
       .eq("id", id)
-      .single();
+      .maybeSingle();
 
-    if (workspaceError || !workspace) {
-      return NextResponse.json({ error: "Workspace not found." }, { status: 404 });
+    if (workspaceError) {
+      throw workspaceError;
+    }
+
+    if (!workspace) {
+      return notFound("Workspace not found.");
     }
 
     const { data: existing, error: existingError } = await supabase
@@ -235,7 +259,6 @@ export async function POST(
       stageName,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to save output.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return serverError("workspace.output", error);
   }
 }

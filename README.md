@@ -178,14 +178,14 @@ cortex-ops/
 │   │   └── supabase-server.ts
 │   └── types/
 ├── public/
-├── supabase/schema.sql
-├── middleware.ts
+├── src/middleware.ts
+├── supabase/migrations/
 └── README.md
 ```
 
 ## Database Model
 
-The schema lives in [`supabase/schema.sql`](supabase/schema.sql).
+The schema lives in [`supabase/migrations/`](supabase/migrations/): the original schema plus the Phase 0 security migration (staff allowlist RLS). See [`docs/SECURITY-PHASE0.md`](docs/SECURITY-PHASE0.md).
 
 ### Tables
 
@@ -476,7 +476,7 @@ Pipeline logic lives in [`src/lib/pipeline.ts`](src/lib/pipeline.ts).
 
 ## Authentication
 
-Authentication is enforced through [`middleware.ts`](middleware.ts).
+Authentication is enforced by [`src/middleware.ts`](src/middleware.ts), and every page and API route also requires the user to be listed in `public.staff_members` ([`src/lib/auth.ts`](src/lib/auth.ts)).
 
 - `/login` is public
 - protected routes redirect to `/login`
@@ -508,7 +508,7 @@ The current implementation depends directly on the public URL and anon key. The 
 
 ### 3. Create the database schema
 
-Run the SQL in [`supabase/schema.sql`](supabase/schema.sql) inside Supabase.
+Apply the files in [`supabase/migrations/`](supabase/migrations/) in order (`supabase db push`, or paste them into the SQL editor), then add your user to `public.staff_members` as described in [`docs/SECURITY-PHASE0.md`](docs/SECURITY-PHASE0.md). Keep public sign-up disabled.
 
 ### 4. Run the app
 
@@ -553,7 +553,8 @@ Not yet implemented:
 - [`cortex-brand-identity.docx`](cortex-brand-identity.docx): source brand identity
 - [`cortex-ops-plan.md`](cortex-ops-plan.md): phased implementation plan
 - [`cortex-ops-dashboard-build.md`](cortex-ops-dashboard-build.md): source product specification
-- [`supabase/schema.sql`](supabase/schema.sql): database schema
+- [`supabase/migrations/`](supabase/migrations/): database schema and migrations
+- [`docs/SECURITY-PHASE0.md`](docs/SECURITY-PHASE0.md): security findings, deployment and rollback
 
 ## Deployment
 

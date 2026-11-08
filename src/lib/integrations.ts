@@ -32,6 +32,13 @@ export function getCalWebhookSecret() {
   return secret;
 }
 
+// How old a signed Cal.com delivery may be before it is rejected as a replay.
+// Cal.com signatures carry no timestamp, so the signed body's createdAt is used.
+export function getCalWebhookMaxAgeMs() {
+  const seconds = Number(process.env.CAL_WEBHOOK_MAX_AGE_SECONDS ?? 86_400);
+  return (Number.isFinite(seconds) && seconds > 0 ? seconds : 86_400) * 1000;
+}
+
 export function getOptionalElevenLabsConfig() {
   const apiKey = process.env.ELEVENLABS_API_KEY?.trim();
   const agentId = process.env.ELEVENLABS_AGENT_ID?.trim();
@@ -59,6 +66,28 @@ export function getElevenLabsWebhookSecret() {
   }
 
   return secret;
+}
+
+// Overridable only so the security test suite can point at a local mock.
+export function getElevenLabsApiBaseUrl() {
+  return (process.env.ELEVENLABS_API_BASE_URL?.trim() || "https://api.elevenlabs.io").replace(
+    /\/+$/,
+    ""
+  );
+}
+
+// Browser origins allowed to call the public /api/call/start endpoint
+// (the marketing site that hosts the /call page).
+export function getCallAllowedOrigins() {
+  return (process.env.CALL_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim().replace(/\/+$/, ""))
+    .filter(Boolean);
+}
+
+// Public URL of the call page, e.g. https://cortex-pi-sable.vercel.app/call
+export function getCallPageUrl() {
+  return process.env.CALL_PAGE_URL?.trim() || null;
 }
 
 export function parseTier(value?: string | null, fallback: Tier = "launch"): Tier {

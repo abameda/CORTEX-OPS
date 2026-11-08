@@ -1,12 +1,16 @@
 import crypto from "node:crypto";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
+import { badRequest, isUuid, serverError } from "@/lib/http";
 import {
+  getElevenLabsApiBaseUrl,
   getElevenLabsConfig,
   getElevenLabsWebhookSecret,
 } from "@/lib/integrations";
 import { createAdminClient } from "@/lib/supabase-admin";
 import { isSupabaseConfigured } from "@/lib/supabase-config";
 import { saveTranscriptAndAdvance } from "@/lib/transcripts";
+import { claimWebhookEvent, releaseWebhookEvent, safeCompare } from "@/lib/webhook-security";
 
 interface ElevenLabsTranscriptTurn {
   role?: string;
@@ -50,21 +54,6 @@ function formatTranscript(transcript: ElevenLabsTranscriptTurn[]) {
     .join("\n\n");
 }
 
-function getString(value: unknown) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function safeCompare(a: string, b: string) {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  return crypto.timingSafeEqual(left, right);
-}
-
 function parseSignatureHeader(signatureHeader: string) {
   const parts = signatureHeader
     .split(",")
@@ -80,7 +69,7 @@ function parseSignatureHeader(signatureHeader: string) {
   return { timestamp, signatures };
 }
 
-function verifyElevenLabsSignature(rawBody: string, signatureHeader: string) {
+function verifyElevenLabsSignature(rawBody: string, signatureHeader: string, secret: string) {
   const { timestamp, signatures } = parseSignatureHeader(signatureHeader);
 
   if (!timestamp || signatures.length === 0) {
@@ -97,7 +86,7 @@ function verifyElevenLabsSignature(rawBody: string, signatureHeader: string) {
   }
 
   const expectedSignature = crypto
-    .createHmac("sha256", getElevenLabsWebhookSecret())
+    .createHmac("sha256", secret)
     .update(`${timestamp}.${rawBody}`)
     .digest("hex");
 
@@ -107,7 +96,7 @@ function verifyElevenLabsSignature(rawBody: string, signatureHeader: string) {
 async function fetchConversation(conversationId: string) {
   const { apiKey } = getElevenLabsConfig();
   const response = await fetch(
-    `https://api.elevenlabs.io/v1/convai/conversations/${conversationId}`,
+    `${getElevenLabsApiBaseUrl()}/v1/convai/conversations/${encodeURIComponent(conversationId)}`,
     {
       headers: {
         "xi-api-key": apiKey,
@@ -123,41 +112,51 @@ async function fetchConversation(conversationId: string) {
   return (await response.json()) as ElevenLabsConversationPayload;
 }
 
-async function resolveWorkspaceId(
-  supabase: ReturnType<typeof createAdminClient>,
-  conversation: ElevenLabsConversationPayload
+// Binds the conversation to the call session that was issued server-side and
+// consumed by /api/call/start. The session id reaches the client only through
+// that endpoint (after a valid single-use token), so it cannot be guessed or
+// pointed at another workspace. The previous workspace_id / cal_booking_id
+// dynamic variables were client-controlled and are no longer accepted.
+async function bindCallSession(
+  supabase: SupabaseClient,
+  callSessionId: string,
+  conversationId: string
 ) {
-  const dynamicVariables =
-    conversation.conversation_initiation_client_data?.dynamic_variables ?? {};
+  const { data, error } = await supabase
+    .from("call_sessions")
+    .update({
+      conversation_id: conversationId,
+      status: "completed",
+      completed_at: new Date().toISOString(),
+    })
+    .eq("id", callSessionId)
+    .eq("status", "started")
+    .is("conversation_id", null)
+    .select("workspace_id")
+    .maybeSingle();
 
-  const explicitWorkspaceId =
-    getString(dynamicVariables.workspace_id) || getString(dynamicVariables.workspaceId);
-  if (explicitWorkspaceId) {
-    return explicitWorkspaceId;
+  if (error) {
+    throw error;
   }
 
-  const calBookingId =
-    getString(dynamicVariables.cal_booking_id) || getString(dynamicVariables.calBookingId);
-  if (calBookingId) {
-    const { data, error } = await supabase
-      .from("stage_outputs")
-      .select("workspace_id")
-      .eq("stage", 1)
-      .eq("stage_name", "discovery_call")
-      .contains("input_data", { cal_booking_id: calBookingId })
-      .limit(1)
-      .maybeSingle();
-
-    if (error) {
-      throw error;
-    }
-
-    if (data?.workspace_id) {
-      return data.workspace_id as string;
-    }
+  if (data) {
+    return data.workspace_id as string;
   }
 
-  return null;
+  // Retry after a failed save: the session is already bound to this same
+  // conversation, so processing may continue. Any other state is rejected.
+  const { data: alreadyBound, error: boundError } = await supabase
+    .from("call_sessions")
+    .select("workspace_id")
+    .eq("id", callSessionId)
+    .eq("conversation_id", conversationId)
+    .maybeSingle();
+
+  if (boundError) {
+    throw boundError;
+  }
+
+  return (alreadyBound?.workspace_id as string | undefined) ?? null;
 }
 
 export async function POST(request: NextRequest) {
@@ -165,86 +164,87 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Supabase is not configured." }, { status: 503 });
   }
 
+  let secret: string;
+  let agentId: string;
   try {
-    const rawBody = await request.text();
-    const signatureHeader = request.headers.get("ElevenLabs-Signature");
+    secret = getElevenLabsWebhookSecret();
+    agentId = getElevenLabsConfig().agentId;
+  } catch (error) {
+    return serverError("webhook.elevenlabs.config", error);
+  }
 
-    if (!signatureHeader || !verifyElevenLabsSignature(rawBody, signatureHeader)) {
-      return NextResponse.json(
-        { error: "Invalid ElevenLabs webhook signature." },
-        { status: 401 }
-      );
+  const rawBody = await request.text();
+  const signatureHeader = request.headers.get("ElevenLabs-Signature");
+
+  if (!signatureHeader || !verifyElevenLabsSignature(rawBody, signatureHeader, secret)) {
+    return NextResponse.json(
+      { error: "Invalid ElevenLabs webhook signature." },
+      { status: 401 }
+    );
+  }
+
+  let body: ElevenLabsWebhookPayload;
+  try {
+    body = JSON.parse(rawBody) as ElevenLabsWebhookPayload;
+  } catch {
+    return badRequest("Malformed ElevenLabs webhook payload.");
+  }
+
+  const webhookType = body.type ?? "unknown";
+  if (body.type && body.type !== "post_call_transcription") {
+    return NextResponse.json({ received: true, ignored: true, type: webhookType });
+  }
+
+  const conversationId = body.data?.conversation_id;
+  if (!conversationId || typeof conversationId !== "string") {
+    return badRequest("conversation_id is required in the ElevenLabs webhook payload.");
+  }
+
+  const supabase = createAdminClient();
+  const eventKey = `post_call_transcription:${conversationId}`;
+
+  try {
+    const claim = await claimWebhookEvent(supabase, "elevenlabs", eventKey);
+    if (claim === "duplicate") {
+      return NextResponse.json({ received: true, duplicate: true, conversationId });
     }
+  } catch (error) {
+    return serverError("webhook.elevenlabs.claim", error);
+  }
 
-    const body = JSON.parse(rawBody) as ElevenLabsWebhookPayload;
+  try {
     const initialConversation = body.data;
-    const webhookType = body.type ?? "unknown";
-
-    if (body.type && body.type !== "post_call_transcription") {
-      return NextResponse.json({ received: true, ignored: true, type: webhookType });
-    }
-
-    const conversationId = initialConversation?.conversation_id;
-    if (!conversationId) {
-      return NextResponse.json(
-        { error: "conversation_id is required in the ElevenLabs webhook payload." },
-        { status: 400 }
-      );
-    }
-
     const conversation =
       initialConversation?.transcript && initialConversation.transcript.length > 0
         ? initialConversation
         : await fetchConversation(conversationId);
 
-    const { agentId } = getElevenLabsConfig();
     if (conversation.agent_id !== agentId) {
-      return NextResponse.json(
-        { error: "Webhook agent_id does not match ELEVENLABS_AGENT_ID." },
-        { status: 400 }
-      );
+      console.warn("[webhook.elevenlabs] agent_id mismatch", { conversationId });
+      return NextResponse.json({ received: true, ignored: "agent_mismatch" });
     }
 
     const transcriptText = formatTranscript(conversation.transcript ?? []);
     if (!transcriptText) {
-      return NextResponse.json(
-        { error: "No transcript content was available for this ElevenLabs conversation." },
-        { status: 400 }
-      );
+      return NextResponse.json({ received: true, ignored: "empty_transcript" });
     }
 
-    const supabase = createAdminClient();
-    const workspaceId = await resolveWorkspaceId(supabase, conversation);
-
-    if (!workspaceId) {
-      return NextResponse.json(
-        {
-          error:
-            "Unable to resolve workspace. Pass workspace_id or cal_booking_id in ElevenLabs dynamic variables.",
-        },
-        { status: 400 }
-      );
-    }
-
-    const transcriptExistsQuery = await supabase
-      .from("transcripts")
-      .select("id")
-      .eq("workspace_id", workspaceId)
-      .contains("extracted_data", { conversation_id: conversationId })
-      .limit(1)
-      .maybeSingle();
-
-    if (transcriptExistsQuery.error) {
-      throw transcriptExistsQuery.error;
-    }
-
-    if (transcriptExistsQuery.data) {
-      return NextResponse.json({
-        received: true,
-        deduplicated: true,
-        workspaceId,
+    const callSessionId =
+      conversation.conversation_initiation_client_data?.dynamic_variables?.call_session_id;
+    if (!isUuid(callSessionId)) {
+      console.warn("[webhook.elevenlabs] conversation without a call session", {
         conversationId,
       });
+      return NextResponse.json({ received: true, ignored: "unbound_conversation" });
+    }
+
+    const workspaceId = await bindCallSession(supabase, callSessionId, conversationId);
+    if (!workspaceId) {
+      console.warn("[webhook.elevenlabs] call session not active", {
+        conversationId,
+        callSessionId,
+      });
+      return NextResponse.json({ received: true, ignored: "session_not_active" });
     }
 
     const result = await saveTranscriptAndAdvance(supabase, {
@@ -256,11 +256,10 @@ export async function POST(request: NextRequest) {
         source: "elevenlabs_webhook",
         agent_id: conversation.agent_id ?? null,
         conversation_id: conversation.conversation_id ?? null,
+        call_session_id: callSessionId,
         status: conversation.status ?? null,
         summary: conversation.analysis?.transcript_summary ?? null,
         metadata: conversation.metadata ?? null,
-        dynamic_variables:
-          conversation.conversation_initiation_client_data?.dynamic_variables ?? null,
       },
     });
 
@@ -271,8 +270,7 @@ export async function POST(request: NextRequest) {
       conversationId,
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to process ElevenLabs webhook.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    await releaseWebhookEvent(supabase, "elevenlabs", eventKey);
+    return serverError("webhook.elevenlabs", error);
   }
 }

@@ -1,7 +1,9 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { getDefaultStageName } from "@/lib/pipeline";
-import { createAdminClient } from "@/lib/supabase-admin";
 
-type SupabaseAdminClient = ReturnType<typeof createAdminClient>;
+// Accepts either the signed-in staff user's client (manual uploads, subject to
+// RLS) or the service-role client (verified ElevenLabs webhook).
+type SupabaseAdminClient = SupabaseClient;
 
 async function ensureStageRecord(
   workspaceId: string,

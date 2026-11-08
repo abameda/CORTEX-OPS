@@ -6,8 +6,8 @@ export type WebhookClaim = "claimed" | "duplicate" | "in_progress";
 
 // How long an unfinished claim blocks retries. A run that crashed or timed out
 // between claim and completion leaves processed_at null; after this lease the
-// next provider retry may take the claim over. Keep it above the function's
-// maximum duration.
+// next provider retry may take the claim over. It must stay well above the
+// webhook routes' maxDuration (60s), so a live handler's claim is never taken.
 const CLAIM_LEASE_MS = 5 * 60 * 1000;
 
 export function safeCompare(a: string, b: string) {

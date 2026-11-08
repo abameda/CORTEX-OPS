@@ -47,7 +47,12 @@ interface ElevenLabsWebhookPayload {
   data?: ElevenLabsConversationPayload;
 }
 
+// Hard cap on handler runtime. It must stay well below the webhook claim lease
+// in src/lib/webhook-security.ts (5 minutes), so a retry can never take over a
+// claim that a still-running handler holds.
+export const maxDuration = 60;
 const ELEVENLABS_SIGNATURE_TOLERANCE_MS = 5 * 60 * 1000;
+const ELEVENLABS_FETCH_TIMEOUT_MS = 20_000;
 
 function formatTranscript(transcript: ElevenLabsTranscriptTurn[]) {
   return transcript
@@ -107,6 +112,7 @@ async function fetchConversation(conversationId: string) {
         "xi-api-key": apiKey,
       },
       cache: "no-store",
+      signal: AbortSignal.timeout(ELEVENLABS_FETCH_TIMEOUT_MS),
     }
   );
 

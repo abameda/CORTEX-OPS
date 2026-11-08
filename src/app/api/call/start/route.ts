@@ -95,7 +95,11 @@ export async function POST(request: NextRequest) {
       `${getElevenLabsApiBaseUrl()}/v1/convai/conversation/token?agent_id=${encodeURIComponent(
         elevenLabs.agentId
       )}`,
-      { headers: { "xi-api-key": elevenLabs.apiKey }, cache: "no-store" }
+      {
+        headers: { "xi-api-key": elevenLabs.apiKey },
+        cache: "no-store",
+        signal: AbortSignal.timeout(10_000),
+      }
     );
 
     const data = response.ok ? ((await response.json()) as { token?: unknown }) : null;

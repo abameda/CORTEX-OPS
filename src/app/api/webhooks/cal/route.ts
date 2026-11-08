@@ -44,6 +44,10 @@ interface CalWebhookPayload {
   };
 }
 
+// Hard cap on handler runtime. It must stay well below the webhook claim lease
+// in src/lib/webhook-security.ts (5 minutes), so a retry can never take over a
+// claim that a still-running handler holds.
+export const maxDuration = 60;
 const HANDLED_EVENTS = ["BOOKING_CREATED", "BOOKING_REQUESTED", "BOOKING_RESCHEDULED"];
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 

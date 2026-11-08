@@ -31,30 +31,35 @@ echo "== Building app"
 npx next build >/dev/null
 
 echo "== Starting app on :3107"
-# Refuse to run against a stale server left on the port by an earlier run.
-if curl -s -o /dev/null "$OPS_BASE_URL/login"; then
-  echo "Port 3107 is already serving something. Stop it and re-run." >&2
+# Refuse to run if anything holds the port (a stale server from an earlier run
+# would otherwise answer the tests). Binding proves the port is free; an HTTP
+# probe would miss a listener that does not speak HTTP.
+if ! node -e "require('net').createServer().once('error', () => process.exit(1)).listen(3107, () => process.exit(0))"; then
+  echo "Port 3107 is in use. Stop whatever holds it and re-run." >&2
   exit 1
 fi
+LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/cortex-ops-phase0.XXXXXX")"
+echo "   server log: $LOG_FILE"
 # Start the Next.js binary directly (not through npx) so $APP_PID is the
 # server itself and the EXIT trap really stops it.
-node node_modules/next/dist/bin/next start -p 3107 >/tmp/cortex-ops-phase0.log 2>&1 &
+node node_modules/next/dist/bin/next start -p 3107 >"$LOG_FILE" 2>&1 &
 APP_PID=$!
 trap 'kill $APP_PID 2>/dev/null || true' EXIT
 READY=0
-for _ in $(seq 1 60); do
+DEADLINE=$((SECONDS + 60))
+while [ "$SECONDS" -lt "$DEADLINE" ]; do
   if ! kill -0 "$APP_PID" 2>/dev/null; then
-    echo "App exited during start-up; see /tmp/cortex-ops-phase0.log" >&2
+    echo "App exited during start-up; see $LOG_FILE" >&2
     exit 1
   fi
-  if curl -s -o /dev/null "$OPS_BASE_URL/login"; then
+  if curl -s --connect-timeout 2 --max-time 3 -o /dev/null "$OPS_BASE_URL/login"; then
     READY=1
     break
   fi
   sleep 1
 done
 if [ "$READY" -ne 1 ]; then
-  echo "App did not become ready within 60s; see /tmp/cortex-ops-phase0.log" >&2
+  echo "App did not become ready within 60s; see $LOG_FILE" >&2
   exit 1
 fi
 

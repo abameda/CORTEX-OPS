@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import CallLinkManager from "@/components/CallLinkManager";
 import PipelineView from "@/components/PipelineView";
 import WorkspaceStatusManager from "@/components/WorkspaceStatusManager";
 import { isSupabaseConfigured } from "@/lib/supabase-config";
-import { createClient } from "@/lib/supabase-server";
+import { requireStaffPage } from "@/lib/auth";
+import { isUuid } from "@/lib/http";
 
 export default async function WorkspaceDetailPage({
   params,
@@ -25,8 +27,11 @@ export default async function WorkspaceDetailPage({
     );
   }
 
+  const { supabase } = await requireStaffPage();
   const { id } = await params;
-  const supabase = await createClient();
+  if (!isUuid(id)) {
+    notFound();
+  }
 
   const [{ data: workspace }, { data: stageOutputs }, { data: transcript }] = await Promise.all([
     supabase.from("workspaces").select("*").eq("id", id).maybeSingle(),
@@ -110,6 +115,9 @@ export default async function WorkspaceDetailPage({
         </p>
         <div className="mt-3">
           <WorkspaceStatusManager workspace={workspace} />
+        </div>
+        <div className="mt-3">
+          <CallLinkManager workspaceId={workspace.id} />
         </div>
       </div>
 

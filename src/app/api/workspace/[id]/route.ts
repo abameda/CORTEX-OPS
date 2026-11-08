@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireStaffApi } from "@/lib/auth";
+import { badRequest, isUuid, notFound, readJsonBody, serverError } from "@/lib/http";
 import { isSupabaseConfigured } from "@/lib/supabase-config";
-import { createClient } from "@/lib/supabase-server";
 import { WorkspaceStatus } from "@/types";
 
 const VALID_STATUSES: WorkspaceStatus[] = ["active", "completed", "archived"];
@@ -13,15 +14,25 @@ export async function PATCH(
     return NextResponse.json({ error: "Supabase is not configured." }, { status: 503 });
   }
 
+  const auth = await requireStaffApi();
+  if (!auth.ok) {
+    return auth.response;
+  }
+  const { supabase } = auth.context;
+
+  const { id } = await context.params;
+  if (!isUuid(id)) {
+    return notFound("Workspace not found.");
+  }
+
+  const body = await readJsonBody<{ status?: WorkspaceStatus }>(request);
+  const status = body?.status;
+
+  if (!status || !VALID_STATUSES.includes(status)) {
+    return badRequest("Valid workspace status is required.");
+  }
+
   try {
-    const { id } = await context.params;
-    const { status } = (await request.json()) as { status?: WorkspaceStatus };
-
-    if (!status || !VALID_STATUSES.includes(status)) {
-      return NextResponse.json({ error: "Valid workspace status is required." }, { status: 400 });
-    }
-
-    const supabase = await createClient();
     const { data, error } = await supabase
       .from("workspaces")
       .update({
@@ -30,15 +41,18 @@ export async function PATCH(
       })
       .eq("id", id)
       .select("*")
-      .single();
+      .maybeSingle();
 
-    if (error || !data) {
-      return NextResponse.json({ error: "Workspace not found." }, { status: 404 });
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      return notFound("Workspace not found.");
     }
 
     return NextResponse.json({ workspace: data });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to update workspace.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return serverError("workspace.update", error);
   }
 }

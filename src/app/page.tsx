@@ -2,7 +2,7 @@ import { signOut } from "@/app/actions/auth";
 import NewWorkspaceModal from "@/components/NewWorkspaceModal";
 import WorkspaceCard from "@/components/WorkspaceCard";
 import { isSupabaseConfigured } from "@/lib/supabase-config";
-import { createClient } from "@/lib/supabase-server";
+import { requireStaffPage } from "@/lib/auth";
 import { Workspace } from "@/types";
 
 function getUserLabel(user: {
@@ -27,10 +27,7 @@ export default async function Home() {
   let workspaces: Workspace[] | null = null;
 
   if (configured) {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const { supabase, user } = await requireStaffPage();
 
     userEmail = getUserLabel(user);
 

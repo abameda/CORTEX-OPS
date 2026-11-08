@@ -178,14 +178,14 @@ cortex-ops/
 │   │   └── supabase-server.ts
 │   └── types/
 ├── public/
-├── supabase/schema.sql
-├── middleware.ts
+├── src/middleware.ts
+├── supabase/migrations/
 └── README.md
 ```
 
 ## Database Model
 
-The schema lives in [`supabase/schema.sql`](supabase/schema.sql).
+The schema lives in [`supabase/migrations/`](supabase/migrations/): the original schema plus the Phase 0 security migration (staff allowlist RLS). See [`docs/SECURITY-PHASE0.md`](docs/SECURITY-PHASE0.md).
 
 ### Tables
 
@@ -197,8 +197,9 @@ The schema lives in [`supabase/schema.sql`](supabase/schema.sql).
 ### Security Model
 
 - Row Level Security is enabled on all tables.
-- Authenticated users currently have full access.
-- The implementation assumes a single-operator internal tool.
+- Only users listed in `public.staff_members` can read or write project data (`staff_all` policies via `private.is_staff()`). Membership is managed with SQL; it cannot be granted through the API.
+- The `anon` role has no access to these tables. `webhook_events` is service-role only.
+- Public sign-up must stay disabled. See [`docs/SECURITY-PHASE0.md`](docs/SECURITY-PHASE0.md) for the full model, deployment order and rollback.
 
 ## API Surface
 
@@ -476,7 +477,7 @@ Pipeline logic lives in [`src/lib/pipeline.ts`](src/lib/pipeline.ts).
 
 ## Authentication
 
-Authentication is enforced through [`middleware.ts`](middleware.ts).
+Authentication is enforced by [`src/middleware.ts`](src/middleware.ts), and every page and API route also requires the user to be listed in `public.staff_members` ([`src/lib/auth.ts`](src/lib/auth.ts)).
 
 - `/login` is public
 - protected routes redirect to `/login`
@@ -504,11 +505,11 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 ```
 
-The current implementation depends directly on the public URL and anon key. The service role key is included for future operational work.
+The app uses the public URL and anon key for signed-in staff requests. `SUPABASE_SERVICE_ROLE_KEY` is **required** on the server: the Cal.com and ElevenLabs webhooks and the token-gated `POST /api/call/start` use it after verifying their own signature or token. Never expose it to the browser.
 
 ### 3. Create the database schema
 
-Run the SQL in [`supabase/schema.sql`](supabase/schema.sql) inside Supabase.
+Apply the files in [`supabase/migrations/`](supabase/migrations/) in order (`supabase db push`, or paste them into the SQL editor), then add your user to `public.staff_members` as described in [`docs/SECURITY-PHASE0.md`](docs/SECURITY-PHASE0.md). Keep public sign-up disabled.
 
 ### 4. Run the app
 
@@ -553,7 +554,8 @@ Not yet implemented:
 - [`cortex-brand-identity.docx`](cortex-brand-identity.docx): source brand identity
 - [`cortex-ops-plan.md`](cortex-ops-plan.md): phased implementation plan
 - [`cortex-ops-dashboard-build.md`](cortex-ops-dashboard-build.md): source product specification
-- [`supabase/schema.sql`](supabase/schema.sql): database schema
+- [`supabase/migrations/`](supabase/migrations/): database schema and migrations
+- [`docs/SECURITY-PHASE0.md`](docs/SECURITY-PHASE0.md): security findings, deployment and rollback
 
 ## Deployment
 

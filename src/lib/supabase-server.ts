@@ -7,14 +7,18 @@ export async function createClient() {
   const { url, anonKey } = getSupabaseConfig();
   return createServerClient(url, anonKey, {
     cookies: {
-      get(name: string) {
-        return cookieStore.get(name)?.value;
+      getAll() {
+        return cookieStore.getAll();
       },
-      set(name: string, value: string, options) {
-        cookieStore.set({ name, value, ...options });
-      },
-      remove(name: string, options) {
-        cookieStore.set({ name, value: "", ...options });
+      setAll(cookiesToSet) {
+        try {
+          cookiesToSet.forEach(({ name, value, options }) =>
+            cookieStore.set(name, value, options)
+          );
+        } catch {
+          // Called from a Server Component, where cookies are read-only.
+          // The middleware refreshes the session cookie on the next request.
+        }
       },
     },
   });
